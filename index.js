@@ -84,6 +84,9 @@ app.post('/callback2', (req, res) => {
     .then(result => res.json(result));
 });
 
+// Move client initialization before handleEvent
+const client = new line.messagingApi.MessagingApiClient(config);
+
 // ตอบกลับข้อความ
 function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
@@ -101,9 +104,8 @@ app.get('/', (req, res) => {
   res.send('LINE Bot is running.');
 });
 
-const client = new line.messagingApi.MessagingApiClient(config);
 // Start server
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3015;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
