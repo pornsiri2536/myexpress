@@ -101,7 +101,7 @@ function handleEvent(event) {
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.send('LINE Bot is running.');
+  res.send('hello world,pornsiri');
 });
 
 // Start server
