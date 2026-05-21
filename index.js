@@ -1,8 +1,16 @@
+import { createClient } from '@supabase/supabase-js'
 require('dotenv').config();
 const https = require("https");
 const express = require('express');
 const line = require('@line/bot-sdk');
 
+
+// Supabase client setup
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 const app = express();
 
