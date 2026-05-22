@@ -106,30 +106,35 @@ async function handleImage(messageId, replyToken) {
       .from('images')
       .getPublicUrl(`bot-uploads/${fileName}`);
 
-    //ส่งข้อความของผู้ใช้ไปให้ Gemini คิดคำตอบ(ใช้โมเดลล่าสุด gemini-2.5-flash)
-    const imageUrl = publicUrlData.publicUrl;
+      let botReplyText = '';
 
-    const response = await fetch(imageUrl);
-    const imageArrayBuffer = await response.arrayBuffer();
-    const base64ImageData = Buffer.from(imageArrayBuffer).toString('base64');
+      try{
+        //ส่งข้อความของผู้ใช้ไปให้ Gemini คิดคำตอบ(ใช้โมเดลล่าสุด gemini-2.5-flash)
+        const imageUrl = publicUrlData.publicUrl;
 
-    const contents = [
-      {
-        inlineData: {
-          mimeType: "image/jpeg",
-          data: base64ImageData,
-        },
-      },
-      { text: "รูปสัตว์" },
-    ];
+        const response = await fetch(imageUrl);
+        const imageArrayBuffer = await response.arrayBuffer();
+        const base64ImageData = Buffer.from(imageArrayBuffer).toString('base64');
 
-    const geminiResponse = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: contents,
-    });
-    
-    let botReplyText=geminiResponse.text||'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
+        const contents = [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: base64ImageData,
+            },
+          },
+          { text: "รูปสัตว์" },
+        ];
 
+        const geminiResponse = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: contents,
+        });
+        
+        botReplyText=geminiResponse.text||'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
+    } catch (error) {
+        console.error('ส่งข้อความของผู้ใช้ไปให้ Gemini คิดคำตอบ(ใช้โมเดลล่าสุด gemini-2.5-flash:', error);
+    }
      // ตอบกลับข้อความไปยังผู้ใช้ใน LINE
     return await client.replyMessage({
       replyToken: replyToken,
@@ -200,13 +205,17 @@ async function handleEvent(event) {
     botReplyText = `ได้รับข้อความประเภท ${messageType} แล้วครับ`;
   }
 
-  try {
-    //ส่งข้อความของผู้ใช้ไปให้ Gemini คิดคำตอบ(ใช้โมเดลล่าสุด gemini-2.5-flash)
+  /*try{
     const geminiResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents:content,
+      contents: content,
     });
-    botReplyText=geminiResponse.text||'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
+    botReplyText = geminiResponse.text || 'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
+  } catch (error) {
+    console.error('เกิดข้อผิดพลาดในการประมวลผลระบบ:', error);
+  }*/
+
+  try {
     // บันทึกข้อมูลลงตาราง messages ใน Supabase (บันทึกคู่ทั้งคำถามและคำตอบที่เตรียมไว้)
     const { error } = await supabase
       .from('messages')
