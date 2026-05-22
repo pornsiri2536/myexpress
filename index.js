@@ -1,111 +1,246 @@
-import { createClient } from '@supabase/supabase-js'
-require('dotenv').config();
-const https = require("https");
-const express = require('express');
-const line = require('@line/bot-sdk');
-
-
-// Supabase client setup
-const { createClient } = require('@supabase/supabase-js');
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-const app = express();
-
-app.use(express.json());
-app.use(
-  express.urlencoded({
-    extended: true,
-  })
-);
+import express from 'express';
+import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
+import{ GoogleGenAI } from '@google/genai';
+import * as line from '@line/bot-sdk';
+import * as fs from "node:fs";
 
 // ตั้งค่าจาก LINE Developers Console
-const config = {
-  channelAccessToken: 'op4n6ys/ZQHx8E6TC1zzjh6Xnp/l4TjqcL6BjtnOChY+J1+Wgw2kNPirkvVUA4z0JSXkbRRcEZYQ3priCoC5czRJbnAY8eqOjydZjPFFV7aL74AfWetZBGEua+JcDlDlMFrat2XdgCrX2W/imtqrQAdB04t89/1O/w1cDnyilFU=',
-  channelSecret: 'd3b14aff69448de2306c0126f705a9df'
+const config= {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || '',
+  channelSecret: process.env.CHANNEL_SECRET || '',
 };
 
-app.post("/callback", function (req, res) {
-  res.send("HTTP POST request sent to the webhook URL!");
-  // If the user sends a message to your bot, send a reply message
-  if (req.body.events[0].type === "message") {
-    // You must stringify reply token and message data to send to the API server
-    const dataString = JSON.stringify({
-      // Define reply token
-      replyToken: req.body.events[0].replyToken,
-      // Define reply messages
+// create LINE SDK client
+const client = line.LineBotClient.fromChannelAccessToken({
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN
+});
+
+// create Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  //process.env.SUPABASE_KEY,
+  process.env.UPABASE_SERVICE_ROLE_KEY
+);
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+const app = express();
+
+// 1. สร้าง Blob Client สำหรับดึงข้อมูลไฟล์โดยเฉพาะ (ของ v9+)
+const lineBlobClient = new line.messagingApi.MessagingApiBlobClient({
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || ''
+});
+
+const downloadLineContent = async (messageId) => {
+  const stream = await lineBlobClient.getMessageContent(messageId);
+  const chunks = [];
+ 
+  // รองรับทั้งแบบ Blob (มี arrayBuffer) และแบบ Stream
+  if (stream.arrayBuffer) {
+    const arrayBuffer = await stream.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    return {
+      inlineData: {
+        data: buffer.toString('base64'),
+        mimeType: stream.type || 'image/jpeg'
+      },
+      buffer: buffer
+    };
+  } else {
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+    return {
+      inlineData: {
+        data: buffer.toString('base64'),
+        mimeType: 'image/jpeg'
+      },
+      buffer: buffer
+    };
+  }
+};
+
+async function downloadImage(url, destPath) {
+  try {
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    }
+
+    // Convert response to an ArrayBuffer, then to a Buffer for Node.js fs
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Save the buffer to the local file system
+    await fs.writeFile(destPath, buffer);
+    console.log('Image saved successfully!');
+  } catch (error) {
+    console.error('Error downloading image:', error);
+  }
+}
+
+async function handleImage(messageId, replyToken) {
+  try {
+    // ดาวน์โหลดรูปภาพจาก LINE และดึงมาทั้ง Base64 และ Buffer
+    const imageContent = await downloadLineContent(messageId);
+   
+    const fileName = `${messageId}.jpg`;
+
+    // 4. อัปโหลดเข้า Supabaseตามปกติ
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('images')
+      .upload(`bot-uploads/${fileName}`, imageContent.buffer, {
+        contentType: 'image/jpeg',
+        upsert: true
+      });
+
+    if (uploadError) throw new Error(uploadError.message);
+
+    // 5. ดึง Public URL กลับออกไป
+    const { data: publicUrlData } = supabase
+      .storage
+      .from('images')
+      .getPublicUrl(`bot-uploads/${fileName}`);
+
+    //ส่งข้อความของผู้ใช้ไปให้ Gemini คิดคำตอบ(ใช้โมเดลล่าสุด gemini-2.5-flash)
+    const imageUrl = publicUrlData.publicUrl;
+
+    const response = await fetch(imageUrl);
+    const imageArrayBuffer = await response.arrayBuffer();
+    const base64ImageData = Buffer.from(imageArrayBuffer).toString('base64');
+
+    const contents = [
+      {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: base64ImageData,
+        },
+      },
+      { text: "รูปสัตว์" },
+    ];
+
+    const geminiResponse = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: contents,
+    });
+    
+    let botReplyText=geminiResponse.text||'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
+
+     // ตอบกลับข้อความไปยังผู้ใช้ใน LINE
+    return await client.replyMessage({
+      replyToken: replyToken,
       messages: [
         {
+          type: 'image',
+          originalContentUrl: publicUrlData.publicUrl,
+          previewImageUrl: publicUrlData.publicUrl
+        },
+        {
           type: 'text',
-          text: `คุณพิมพ์ว่า: ${req.body.events[0].message.text}`
+          text: botReplyText,
         },
       ],
     });
 
-    // Request header. See Messaging API reference for specification
-    const headers = {
-      "Content-Type": "application/json",
-      Authorization: "Bearer op4n6ys/ZQHx8E6TC1zzjh6Xnp/l4TjqcL6BjtnOChY+J1+Wgw2kNPirkvVUA4z0JSXkbRRcEZYQ3priCoC5czRJbnAY8eqOjydZjPFFV7aL74AfWetZBGEua+JcDlDlMFrat2XdgCrX2W/imtqrQAdB04t89/1O/w1cDnyilFU=",
-    };
+    //return publicUrlData.publicUrl;
 
-    // Options to pass into the request, as defined in the http.request method in the Node.js documentation
-    const webhookOptions = {
-      hostname: "api.line.me",
-      path: "/v2/bot/message/reply",
-      method: "POST",
-      headers: headers,
-      body: dataString,
-    };
-
-    // When an HTTP POST request of message type is sent to the /webhook endpoint,
-    // we send an HTTP POST request to https://api.line.me/v2/bot/message/reply
-    // that is defined in the webhookOptions variable.
-
-    // Define our request
-    const request = https.request(webhookOptions, (res) => {
-      res.on("data", (d) => {
-        process.stdout.write(d);
-      });
-    });
-
-    // Handle error
-    // request.on() is a function that is called back if an error occurs
-    // while sending a request to the API server.
-    request.on("error", (err) => {
-      console.error(err);
-    });
-
-    // Finally send the request and the data we defined
-    request.write(dataString);
-    request.end();
+  } catch (error) {
+    console.error('Error ในการดึงรูปภาพด้วย SDK v9:', error);
+    return null;
   }
-});
-
-app.use('/callback2', line.middleware(config));
+}
 
 // รับ webhook
-app.post('/callback2', (req, res) => {
+// register a webhook handler with middleware
+// about the middleware, please refer to doc
+app.post('/callback', line.middleware(config), (req, res) => {
   Promise
     .all(req.body.events.map(handleEvent))
-    .then(result => res.json(result));
+    .then((result) => res.json(result))
+    .catch((err) => {
+      console.error(err);
+      res.status(500).end();
+    });
 });
 
-// Move client initialization before handleEvent
-const client = new line.messagingApi.MessagingApiClient(config);
 
-// ตอบกลับข้อความ
-function handleEvent(event) {
-  if (event.type !== 'message' || event.message.type !== 'text') {
+// ฟังก์ชัน handleEvent(event) ใหม่ ตามตัวอย่างและคอมเมนต์ของเดิมทิ้งไป
+// 4. ฟังก์ชันหลักในการจัดการ Event และบันทึกข้อมูล
+async function handleEvent(event) {
+  // รองรับเฉพาะ Event ประเภทข้อความ (Message Event) เท่านั้น
+  if (event.type === "message" && event.message.type === "image") {
+    return handleImage(event.message.id, event.replyToken || '');
+  }
+
+  if (event.type !== "message" || event.message.type !== "text") {
     return Promise.resolve(null);
   }
 
-  return client.replyMessage(event.replyToken, {
-    type: 'text',
-    text: `คุณพิมพ์ว่า: ${event.message.text}`
-  });
+  const userId = event.source.userId || 'unknown';
+  const replyToken = event.replyToken || '';
+ 
+  // ดึงข้อมูลพื้นฐานจาก Message Object ของ LINE
+  const messageId = event.message.id;
+  const messageType = event.message.type; // text, image, sticker, video, etc.
+ 
+  let content = null;
+  let botReplyText = '';
+
+  // ตรวจสอบเงื่อนไขตามประเภทข้อความ
+  if (event.message.type === 'text') {
+    content = event.message.text;
+    botReplyText = event.message.text; // ข้อความที่จะตอบกลับ (Echo)
+  } else {
+    // หากเป็นประเภทอื่น เช่น image, sticker, video
+    content = `[Received ${messageType} message]`;
+    botReplyText = `ได้รับข้อความประเภท ${messageType} แล้วครับ`;
+  }
+
+  try {
+    //ส่งข้อความของผู้ใช้ไปให้ Gemini คิดคำตอบ(ใช้โมเดลล่าสุด gemini-2.5-flash)
+    const geminiResponse = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents:content,
+    });
+    botReplyText=geminiResponse.text||'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
+    // บันทึกข้อมูลลงตาราง messages ใน Supabase (บันทึกคู่ทั้งคำถามและคำตอบที่เตรียมไว้)
+    const { error } = await supabase
+      .from('messages')
+      .insert([
+        {
+          user_id: userId,
+          message_id: messageId,
+          type: messageType,
+          content: content,
+          reply_token: replyToken,
+          reply_content: botReplyText
+        }
+      ]);
+
+    if (error) {
+      console.error('Supabase Insert Error:', error.message);
+    }
+
+    // ตอบกลับข้อความไปยังผู้ใช้ใน LINE
+    return await client.replyMessage({
+      replyToken: replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: botReplyText,
+        },
+      ],
+    });
+
+  } catch (error) {
+    console.error('เกิดข้อผิดพลาดในการประมวลผลระบบ:', error);
+  }
 }
+
 
 // Health check endpoint
 app.get('/', (req, res) => {
