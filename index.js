@@ -1,5 +1,4 @@
 import express from 'express';
-import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import{ GoogleGenAI } from '@google/genai';
 import * as line from '@line/bot-sdk';
