@@ -253,7 +253,12 @@ async function handleEvent(event) {
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.send('hello world,pornsiri');
+ //  res.send('hello world,pornsiri');
+  res.json({ message: 'hello world,pornsiri' });
+});
+// เพิ่มส่วนนี้เข้าไปเพื่อให้แสดงผลลัพธ์เหมือนลิงก์ตัวอย่างเป๊ะๆ
+app.get('/functions/v1/line', (req, res) => {
+  res.json({ message: "GET: Hello Ann Pornsiri!" });
 });
 
 // Start server
